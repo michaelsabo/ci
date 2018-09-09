@@ -2,9 +2,10 @@ import {Component, HostBinding, Input, OnInit} from '@angular/core';
 
 import {BuildStatus} from '../../constants';
 
-const FAILED_STATUSES: BuildStatus[] = [
-  BuildStatus.FAILED, BuildStatus.INTERNAL_ISSUE, BuildStatus.MISSING_FASTFILE
-];
+const FAILED_STATUSES: BuildStatus[] =
+    [BuildStatus.FAILED, BuildStatus.MISSING_FASTFILE];
+
+const RUNNING_STATUSES: BuildStatus[] = [BuildStatus.INSTALLING_XCODE, BuildStatus.RUNNING];
 
 @Component({
   selector: 'fci-status-icon',
@@ -22,5 +23,30 @@ export class StatusIconComponent {
    */
   isFailedState(): BuildStatus|false {
     return FAILED_STATUSES.includes(this.status) ? this.status : false;
+  }
+
+  isRunningState(): BuildStatus|false {
+    return RUNNING_STATUSES.includes(this.status) ? this.status : false;
+  }
+
+  getTooltipString(): string {
+    switch (this.status) {
+      case BuildStatus.FAILED:
+        return 'Failed';
+      case BuildStatus.SUCCESS:
+        return 'Success';
+      case BuildStatus.MISSING_FASTFILE:
+        return 'Missing Fastfile';
+      case BuildStatus.INSTALLING_XCODE:
+        return 'Installing XCode';
+      case BuildStatus.INTERNAL_ISSUE:
+        return 'Internal CI Issue';
+      case BuildStatus.PENDING:
+        return 'Pending';
+      case BuildStatus.RUNNING:
+        return 'Running';
+      default:
+        throw new Error(`Unknown status type ${this.status}`);
+    }
   }
 }

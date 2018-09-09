@@ -66,7 +66,38 @@ module FastlaneCI
     end
 
     def username
-      client.login
+      return client.login
+    end
+
+    # Primary email address of the current GitHub user
+    #  Note: This fails if the user.email scope is missing from token
+    def email
+      return client.emails.find(&:primary).email
+    end
+
+    # Returns recent commits for a GitHub repository given a set of `branches`
+    # to get the commits from.
+    #
+    # @param [String] repo_full_name: The name of the repository to get the
+    #   commits from.
+    # @param [Array[String]] branches: An array of branches to be get commits
+    #   from.
+    # @param [Integer] number_of_commits: A limit on the number of commits to
+    #   return for a branch. Will return the last 'n' commits corresponding to
+    #   this number. The reason for this is because otherwise this action
+    #   fetches ALL commits for a branch, so if someone sets up fastlane.ci for
+    #   the first time, and they have 1000 commits for a branch they've created
+    #   a trigger for, it will enqueue 1000 builds starting from the most recent
+    #   commit in the `CheckForNewCommitsOnGithubWorker`, taking a lot of time
+    #   to complete.
+    # @return [Hash] A mapping of 'branch names' to an array of recent commits
+    #   for the branch. { branch_name => [commit_0, ..., commit_n], ... }
+    def branch_name_to_recent_commits_for_branch(repo_full_name:, branches:, number_of_commits: 20)
+      github_action(client) do |c|
+        branches.map do |branch|
+          [branch, c.commits(repo_full_name, branch).first(number_of_commits).reverse]
+        end.to_h
+      end
     end
 
     # returns all open pull requests on given repo
@@ -181,30 +212,59 @@ module FastlaneCI
       end
     end
 
+    def description_for_state(state)
+      case state
+      when "success"
+        "All green"
+      when "pending", "running"
+        "Still running"
+      when "installing_xcode"
+        "Installing Xcode"
+      when "missing_fastfile"
+        "Missing Fastfile"
+      when "ci_problem"
+        "Problem with fastlane.ci"
+      when "failure"
+        "Build encountered a failure"
+      when "error"
+        "Build encountered an error"
+      else
+        "Unknown error"
+      end
+    end
+
     # The `target_url`, `description` and `context` parameters are optional
     # @repo [String] Repo URL as string
     def set_build_status!(repo: nil, sha: nil, state: nil, target_url: nil, description: nil, status_context:)
       status_context = GitHubService.status_context_prefix + status_context
       state = state.to_s
 
-      # Available states https://developer.github.com/v3/repos/statuses/
-      if state == "missing_fastfile" || state == "ci_problem"
-        state = "failure"
-      end
-
-      available_states = ["error", "failure", "pending", "success", "ci_problem"]
-      raise "Invalid state '#{state}'" unless available_states.include?(state)
+      available_states = [
+        "error",
+        "failure",
+        "pending",
+        "running",
+        "success",
+        "ci_problem",
+        "missing_fastfile",
+        "installing_xcode"
+      ]
+      raise "Invalid state for GitHubService: '#{state}'" unless available_states.include?(state)
 
       # We auto receive the SLUG, so that the user of this class can pass a full URL also
       repo = repo.split("/")[-2..-1].join("/")
 
-      if description.nil?
-        description = "All green" if state == "success"
-        description = "Still running" if state == "pending"
+      description ||= description_for_state(state)
 
-        # TODO: what's the difference?
-        description = "Build encountered a failure" if state == "failure"
-        description = "Build encountered an error " if state == "error"
+      # Only after setting the description, we want to update the `state`
+      # to use the official GitHub terms
+      #
+      # All available states https://developer.github.com/v3/repos/statuses/
+      case state
+      when "missing_fastfile", "ci_problem"
+        state = "failure"
+      when "installing_xcode", "running"
+        state = "pending"
       end
 
       # this needs to be synchronous because we're doing it during initialization of our build runner

@@ -3,7 +3,7 @@ require_relative "../../shared/models/project"
 require_relative "../../shared/json_convertible"
 
 module FastlaneCI
-  # View model to expose the basic info about a project.
+  # View model to expose the detailed info about a project.
   class ProjectViewModel
     include FastlaneCI::JSONConvertible
 
@@ -13,6 +13,12 @@ module FastlaneCI
     # @return [String] Is a UUID so we're not open to ID guessing attacks
     attr_reader :id
 
+    # @return [String]
+    attr_reader :repo_name
+
+    # @return [String] lane name to run
+    attr_accessor :lane
+
     # @return [Array[BuildSummaryViewModel]]
     attr_reader :builds
 
@@ -21,7 +27,9 @@ module FastlaneCI
 
       @name = project.project_name
       @id = project.id
+      @lane = project.lane
       @builds = project.builds.map { |build| BuildSummaryViewModel.new(build: build) }
+      @repo_name = project.repo_config.name
     end
   end
 end

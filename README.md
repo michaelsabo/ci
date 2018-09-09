@@ -60,7 +60,7 @@ Right now, `fastlane.ci` is in Alpha, we'd love for you to give it a try. Gettin
 1. `gem install bundler`
 1. `bundle install`
 1. `bundle exec rake prod`
-1. Up at running at [localhost:8080](http://localhost:8080/)
+1. Up and running at [localhost:8080](http://localhost:8080/)
 
 ### Using the `fastlane.ci` Angular frontend
 
@@ -75,6 +75,15 @@ Currently, Docker deployment is for Linux projects only.
 1. `git clone https://github.com/fastlane/ci`
 1. `cd ci`
 1. `docker-compose up`
+1. Up at running at [localhost:8080](http://localhost:8080/)
+
+## Using `fastlane.ci` with Vagrant
+1. Install Vagrant: `brew cask install vagrant`
+1. Install VirtualBox: `brew cask install virtualbox`
+1. `vagrant up`. You will be asked for your password.
+1. `vagrant ssh`
+1. `cd /fastlane-ci`
+1. `bundle exec rake dev`
 1. Up at running at [localhost:8080](http://localhost:8080/)
 
 ### Configure `fastlane.ci`

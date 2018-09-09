@@ -41,8 +41,8 @@ module FastlaneCI
     # This is an array of hashes
     attr_accessor :all_build_output_log_rows
 
-    # All blocks listening to changes for this build
-    attr_accessor :build_change_observer_blocks
+    # All build change observers that are listening to changes for this build
+    attr_accessor :build_change_listeners
 
     # Work queue where builds should be run
     attr_reader :work_queue
@@ -50,11 +50,22 @@ module FastlaneCI
     # Array of env variables that were set, that we need to unset after the run
     attr_accessor :environment_variables_set
 
-    def initialize(project:, sha:, github_service:, notification_service:, work_queue:, trigger:, git_fork_config:)
+    # Folder where the code will be checked out to, and where the build will happen
+    attr_reader :local_build_folder
+
+    def initialize(
+      project:,
+      sha:,
+      github_service:,
+      notification_service:,
+      work_queue:,
+      trigger:,
+      git_fork_config:,
+      local_build_folder: nil
+    )
       if trigger.nil?
         raise "No trigger provided, this is probably caused by a build being triggered, " \
               "but then the project not having this particular build trigger associated"
-        # rubocop:enable Metrics/LineLength
       end
 
       if git_fork_config.nil?
@@ -67,9 +78,10 @@ module FastlaneCI
       @project = project
       @sha = sha
       @git_fork_config = git_fork_config
+      @local_build_folder = local_build_folder
 
       self.all_build_output_log_rows = []
-      self.build_change_observer_blocks = []
+      self.build_change_listeners = []
 
       # TODO: provider credential should determine what exact CodeHostingService gets instantiated
       @code_hosting_service = github_service
@@ -78,10 +90,11 @@ module FastlaneCI
 
       prepare_build_object(trigger: trigger)
 
+      local_folder = @local_build_folder || File.join(project.local_repo_path, "builds", sha)
       @repo = GitRepo.new(
         git_config: project.repo_config,
         provider_credential: github_service.provider_credential,
-        local_folder: File.join(project.local_repo_path, "builds", sha),
+        local_folder: local_folder,
         notification_service: notification_service,
         async_start: false
       )
@@ -170,21 +183,44 @@ module FastlaneCI
 
     def pre_run_action(&completion_block)
       logger.debug("Running pre_run_action in checkout_sha")
+
       checkout_sha do |checkout_success|
         if checkout_success
-          setup_build_specific_environment_variables
+          if setup_tooling_environment? # see comment for `#setup_tooling_environment?` method
+            setup_build_specific_environment_variables
+            completion_block.call(checkout_success)
+          end
         else
           # TODO: this could be a notification specifically for user interaction
           logger.debug("Unable to launch build runner because we were unable to checkout the required sha: #{sha}")
+          completion_block.call(checkout_success)
         end
-        completion_block.call(checkout_success)
       end
+    end
+
+    # Implement this method in sub classes to prepare necessary tooling
+    # like Xcode or Android studio, to be able to successfully run a build
+    # @return [Boolean] Return `false` if the build trigger some longer process
+    #         e.g. installing a new development environment. This will not call
+    #         the completion block and interrupt running the give build.
+    #         It's critical that the `setup_tooling_environment?` method
+    #         added the same build runner onto the work queue again
+    #         Check out the `fastlane_build_runner` implementation for more details
+    def setup_tooling_environment?
+      not_implemented(__method__)
     end
 
     def setup_build_specific_environment_variables
       @environment_variables_set = []
 
       # Set the CI specific Environment variables first
+      build_url = File.join(
+        Services.dot_keys_variable_service.keys.ci_base_url,
+        "projects",
+        project.id,
+        "builds",
+        current_build_number.to_s
+      )
 
       # We try to follow the existing formats
       # https://wiki.jenkins.io/display/JENKINS/Building+a+software+project
@@ -194,22 +230,24 @@ module FastlaneCI
         WORKSPACE: project.local_repo_path,
         GIT_URL: repo.git_config.git_url,
         GIT_SHA: current_build.sha,
-        BUILD_URL: "https://fastlane.ci", # TODO: actually build the URL, we don't know our own host, right?
+        BUILD_URL: build_url,
+        BUILD_ID: current_build_number.to_s,
         CI_NAME: "fastlane.ci",
+        FASTLANE_CI: true,
         CI: true
       }
 
       if git_fork_config.branch.to_s.length > 0
-        env_mapping[:GIT_BRANCH] = git_fork_config.branch.to_s # TODO: does this work?
+        env_mapping[:GIT_BRANCH] = git_fork_config.branch.to_s
       else
-        env_mapping[:GIT_BRANCH] = "master" # TODO: use actual default branch?
+        env_mapping[:GIT_BRANCH] = "master"
       end
 
       # We need to duplicate some ENV variables
       env_mapping[:CI_BUILD_NUMBER] = env_mapping[:BUILD_NUMBER]
       env_mapping[:CI_BUILD_URL] = env_mapping[:BUILD_URL]
       env_mapping[:CI_BRANCH] = env_mapping[:GIT_BRANCH]
-      # env_mapping[:CI_PULL_REQUEST] = nil # TODO: do we have the PR information here?
+      # env_mapping[:CI_PULL_REQUEST] = nil # It seems like we don't have PR information here
 
       # Now that we have the CI specific ENV variables, let's go through the ENV variables
       # the user defined in their configuration
@@ -348,15 +386,24 @@ module FastlaneCI
       all_build_output_log_rows << row
 
       # 2) Report back to all listeners, usually socket connections
-      build_change_observer_blocks.each do |current_block|
-        current_block.call(row)
+      listeners_done_listening = []
+      build_change_listeners.each do |current_listener|
+        if current_listener.done_listening?
+          listeners_done_listening << current_listener
+          next
+        end
+
+        current_listener.row_received(row)
       end
+
+      # remove any listeners that are done listening
+      self.build_change_listeners -= listeners_done_listening
     end
 
     # Add a listener to get real time updates on new rows (see `new_row`)
     # This is used for the socket connection to the user's browser
-    def add_listener(block)
-      build_change_observer_blocks << block
+    def add_build_change_listener(listener)
+      build_change_listeners << listener
     end
 
     def prepare_build_object(trigger:)
@@ -386,7 +433,7 @@ module FastlaneCI
     private
 
     def save_build_status_locally!
-      # Create or update the local build file in the config directory
+      # Create local build file in the config directory
       Services.build_service.add_build!(
         project: project,
         build: current_build
@@ -413,7 +460,7 @@ module FastlaneCI
     def save_build_status_source!
       status_context = project.project_name
 
-      build_path = FastlaneCI::BuildController.build_url(project_id: project.id, build_number: current_build.number)
+      build_path = FastlaneCI::BuildJSONController.build_url(project_id: project.id, build_number: current_build.number)
       build_url = FastlaneCI.dot_keys.ci_base_url + build_path
       code_hosting_service.set_build_status!(
         repo: project.repo_config.git_url,

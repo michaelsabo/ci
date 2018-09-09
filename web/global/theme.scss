@@ -1,8 +1,9 @@
 /* You can add global styles to this file, and also import other style files */
 
 @import '~@angular/material/prebuilt-themes/deeppurple-amber.css';
+
 // TODO: using theme functions to set the themes instead of overriding manually
-// TODO: Find out if Roboto is packaged in Angular Material
+
 body {
     margin: 0;
     font-family: 'Google Sans', sans-serif; // Default font-family
@@ -11,4 +12,16 @@ body {
 button.mat-button,
 button.mat-raised-button {
     text-transform: uppercase;
+}
+
+html,
+body,
+.fci-full-height-container {
+    height: 100%;
+    display: block;
+    position: relative;
+}
+
+.fci-success-icon {
+    color: #00897b;
 }

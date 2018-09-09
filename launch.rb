@@ -134,24 +134,35 @@ module FastlaneCI
         FastlaneCI::FastlaneApp.use(FastlaneCI::ConfigurationController)
         FastlaneCI::FastlaneApp.use(FastlaneCI::DashboardController)
         FastlaneCI::FastlaneApp.use(FastlaneCI::NotificationsController)
-        FastlaneCI::FastlaneApp.use(FastlaneCI::OnboardingController)
         FastlaneCI::FastlaneApp.use(FastlaneCI::ProviderCredentialsController)
         FastlaneCI::FastlaneApp.use(FastlaneCI::UsersController)
         FastlaneCI::FastlaneApp.use(FastlaneCI::EnvironmentVariablesController)
-        FastlaneCI::FastlaneApp.use(FastlaneCI::AppleIDsController)
+        FastlaneCI::FastlaneApp.use(FastlaneCI::XcodeManagerController)
+        FastlaneCI::FastlaneApp.use(FastlaneCI::AppleIDController)
       end
 
-      # TODO: Only load this with ERB_CLIENT env once Web app has login support
+      # TODO: Only load this with ERB_CLIENT env once Web app has login/onboarding support
       FastlaneCI::FastlaneApp.use(FastlaneCI::LoginController)
+      FastlaneCI::FastlaneApp.use(FastlaneCI::OnboardingController)
 
       # Load JSON controllers
       require_relative "app/features-json/project_json_controller"
       require_relative "app/features-json/repos_json_controller"
       require_relative "app/features-json/login_json_controller"
+      require_relative "app/features-json/user_json_controller"
+      require_relative "app/features-json/build_json_controller"
+      require_relative "app/features-json/artifact_json_controller"
+      require_relative "app/features-json/setup_json_controller"
+      require_relative "app/features-json/setting_json_controller"
 
       FastlaneCI::FastlaneApp.use(FastlaneCI::LoginJSONController)
       FastlaneCI::FastlaneApp.use(FastlaneCI::ProjectJSONController)
       FastlaneCI::FastlaneApp.use(FastlaneCI::RepositoryJSONController)
+      FastlaneCI::FastlaneApp.use(FastlaneCI::BuildJSONController)
+      FastlaneCI::FastlaneApp.use(FastlaneCI::ArtifactJSONController)
+      FastlaneCI::FastlaneApp.use(FastlaneCI::SetupJSONController)
+      FastlaneCI::FastlaneApp.use(FastlaneCI::SettingJSONController)
+      FastlaneCI::FastlaneApp.use(FastlaneCI::UserJSONController)
     end
 
     def self.start_github_workers
@@ -214,6 +225,9 @@ module FastlaneCI
       logger.debug("Searching all projects for commits with pending status that need a new build")
       # For each project, rerun all builds with the status of "pending"
       projects.each do |project|
+        # Don't enqueue builds for the open pull requests if we don't have a pull request trigger defined for it
+        next if project.find_triggers_of_type(trigger_type: :pull_request).first.nil?
+
         pending_build_shas_needing_rebuilds = Services.build_service.pending_build_shas_needing_rebuilds(
           project: project
         )
@@ -223,17 +237,9 @@ module FastlaneCI
         end
 
         repo_full_name = project.repo_config.full_name
-        branches_to_check = project.job_triggers
-                                   .select { |trigger| trigger.type == FastlaneCI::JobTrigger::TRIGGER_TYPE[:commit] }
-                                   .map(&:branch)
-                                   .uniq
-
         # We have a list of shas that need rebuilding, but we need to know which repo_full_name they belong to
         # because they could be forks of the main repo, so let's grab all that info
-        open_pull_requests = github_service.open_pull_requests(
-          repo_full_name: repo_full_name,
-          branches: branches_to_check
-        )
+        open_pull_requests = github_service.open_pull_requests(repo_full_name: repo_full_name)
 
         # Enqueue each pending build rerun in an asynchronous task queue
         pending_build_shas_needing_rebuilds.each do |sha|
@@ -250,28 +256,19 @@ module FastlaneCI
             next
           end
 
-          git_fork_config = nil
-
-          if matching_open_pr.fork_of_repo?(repo_full_name: repo_full_name)
-            git_fork_config = GitForkConfig.new(
-              sha: sha,
-              branch: matching_open_pr.branch,
-              clone_url: matching_open_pr.clone_url,
-              ref: matching_open_pr.git_ref
-            )
-          end
-
-          build_runner = FastlaneBuildRunner.new(
-            project: project,
+          git_fork_config = GitForkConfig.new(
             sha: sha,
-            github_service: github_service,
-            notification_service: Services.notification_service,
-            # using the git repo queue because of https://github.com/ruby-git/ruby-git/issues/355
-            work_queue: FastlaneCI::GitRepo.git_action_queue,
-            git_fork_config: git_fork_config,
-            trigger: project.find_triggers_of_type(trigger_type: :commit).first
+            branch: matching_open_pr.branch,
+            clone_url: matching_open_pr.clone_url,
+            ref: matching_open_pr.git_ref
           )
-          build_runner.setup(parameters: nil)
+
+          build_runner = RemoteRunner.new(
+            project: project,
+            github_service: github_service,
+            git_fork_config: git_fork_config,
+            trigger: project.find_triggers_of_type(trigger_type: :pull_request).first
+          )
           Services.build_runner_service.add_build_runner(build_runner: build_runner)
         end
       end
@@ -282,21 +279,18 @@ module FastlaneCI
     def self.enqueue_builds_for_open_github_prs_with_no_status(projects: nil, github_service: nil)
       logger.debug("Searching for open PRs with no status and starting a build for them")
       projects.each do |project|
+        # Don't enqueue builds for the open pull requests if we don't have a pull request trigger defined for it
+        next if project.find_triggers_of_type(trigger_type: :pull_request).first.nil?
+
         # TODO: generalize this sort of thing
         credential_type = project.repo_config.provider_credential_type_needed
 
         # we don't support anything other than GitHub right now
         next unless credential_type == FastlaneCI::ProviderCredential::PROVIDER_CREDENTIAL_TYPES[:github]
 
-        # Collect all the branches from the triggers on this project that are commit-based
-        branches_to_check = project.job_triggers
-                                   .select { |trigger| trigger.type == FastlaneCI::JobTrigger::TRIGGER_TYPE[:commit] }
-                                   .map(&:branch)
-                                   .uniq
-
         repo_full_name = project.repo_config.full_name
         # let's get all commit shas that need a build (no status yet)
-        open_prs = github_service.open_pull_requests(repo_full_name: repo_full_name, branches: branches_to_check)
+        open_prs = github_service.open_pull_requests(repo_full_name: repo_full_name)
 
         # no commit shas need to be switched to `pending` state
         next unless open_prs.count > 0
@@ -311,29 +305,22 @@ module FastlaneCI
           # if we have a status, skip it!
           next if statuses.count > 0
 
-          git_fork_config = nil
-          if open_pr.fork_of_repo?(repo_full_name: project.repo_config.full_name)
-            git_fork_config = GitForkConfig.new(
-              sha: open_pr.current_sha,
-              branch: open_pr.branch,
-              clone_url: open_pr.clone_url,
-              ref: open_pr.git_ref
-            )
-          end
-
           logger.debug("Found sha: #{open_pr.current_sha} in #{open_pr.repo_full_name} missing status, adding build.")
 
-          build_runner = FastlaneBuildRunner.new(
-            project: project,
+          git_fork_config = GitForkConfig.new(
             sha: open_pr.current_sha,
-            github_service: github_service,
-            notification_service: Services.notification_service,
-            # using the git repo queue because of https://github.com/ruby-git/ruby-git/issues/355
-            work_queue: FastlaneCI::GitRepo.git_action_queue,
-            git_fork_config: git_fork_config,
-            trigger: project.find_triggers_of_type(trigger_type: :commit).first
+            branch: open_pr.branch,
+            clone_url: open_pr.clone_url,
+            ref: open_pr.git_ref
           )
-          build_runner.setup(parameters: nil)
+
+          build_runner = RemoteRunner.new(
+            project: project,
+            github_service: github_service,
+            git_fork_config: git_fork_config,
+            trigger: project.find_triggers_of_type(trigger_type: :pull_request).first
+          )
+
           Services.build_runner_service.add_build_runner(build_runner: build_runner)
         end
       end

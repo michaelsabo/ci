@@ -7,7 +7,6 @@ describe FastlaneCI::JSONUserDataSource do
     stub_file_io
     stub_git_repos
     stub_services
-    stub_environment_variables
   end
 
   let(:file_path) do
@@ -31,7 +30,7 @@ describe FastlaneCI::JSONUserDataSource do
     end
 
     before(:each) do
-      subject.stub(:users).and_return(users)
+      allow(subject).to receive(:users).and_return(users)
     end
 
     context "user doesn't exist" do
@@ -73,12 +72,12 @@ describe FastlaneCI::JSONUserDataSource do
 
     context "user doesn't exist" do
       before(:each) do
-        subject.stub(:users).and_return([])
+        allow(subject).to receive(:users).and_return([])
       end
 
       it "raises an error message and doesn't write to the `users.json` file" do
         expect(File).not_to(receive(:write))
-        expect { subject.update_user!(user: user) }.to raise_error
+        expect { subject.update_user!(user: user) }.to raise_error(RuntimeError, "Couldn't update user test.user1@gmail.com because they don't exist")
       end
     end
 
@@ -87,7 +86,7 @@ describe FastlaneCI::JSONUserDataSource do
       let(:new_user) { FastlaneCI::User.new(user_params.first.merge(email: new_user_email)) }
 
       before(:each) do
-        subject.stub(:users).and_return(users)
+        allow(subject).to receive(:users).and_return(users)
       end
 
       it "updates the `user` email in the `users.json` file" do
@@ -103,18 +102,18 @@ describe FastlaneCI::JSONUserDataSource do
 
     context "user doesn't exist" do
       before(:each) do
-        subject.stub(:users).and_return([])
+        allow(subject).to receive(:users).and_return([])
       end
 
       it "raises an error message and doesn't write to the `users.json` file" do
         expect(File).not_to(receive(:write))
-        expect { subject.delete_user!(user: user) }.to raise_error
+        expect { subject.delete_user!(user: user) }.to raise_error(RuntimeError, "Couldn't delete user test.user1@gmail.com because they don't exist")
       end
     end
 
     context "user exists" do
       before(:each) do
-        subject.stub(:users).and_return(users)
+        allow(subject).to receive(:users).and_return(users)
       end
 
       it "removes the `user` from the `users.json` file" do

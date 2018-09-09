@@ -33,7 +33,7 @@
     .mat-row {
         cursor: pointer;
         &:hover {
-            background-color: #F3E5F5
+            background-color: #F3E5F5;
         }
         .mat-cell {
             white-space: nowrap;
@@ -41,6 +41,11 @@
             text-overflow: ellipsis;
             align-items: center;
             display: flex;
+            span {
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
             .fci-status-icon {
                 margin-right: 8px;
             }

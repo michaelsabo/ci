@@ -1,14 +1,28 @@
+# foreman is not included in the Gemfile, more context
+# https://github.com/ddollar/foreman/pull/678#issuecomment-398211757
+
 task :dev do
-  sh "bundle exec rackup --host 0.0.0.0 --port 8080 --env development"
+  unless system("which foreman", out: File::NULL)
+    raise "`foreman` is now required for process management. `sudo gem install foreman`"
+  end
+  sh "foreman start -f Procfile.dev"
 end
 
 task :prod do
-  sh "bundle exec rackup --host 0.0.0.0 --port 8080 --env production"
+  unless system("which foreman", out: File::NULL)
+    raise "`foreman` is now required for process management. `sudo gem install foreman`"
+  end
+  sh "foreman start"
 end
 
 task :dev_bootstrap do
+  unless system("which brew")
+    raise "`brew` is required. Please install brew. https://brew.sh/"
+  end
+
   sh("bundle install")
-  sh("brew install node") unless sh("npm -v")
+  sh("gem install foreman")
+  sh("brew install node") unless system("which npm")
   sh("npm install")
   sh("ln -sf ../../.pre-commit .git/hooks/pre-commit")
 end
@@ -33,6 +47,10 @@ namespace :docker do
     sh("bundle install")
     sh("npm install")
   end
+end
+
+task :generate_protos do
+  sh "bundle exec grpc_tools_ruby_protoc -I protos/ --ruby_out=./protos --grpc_out=./protos protos/*.proto"
 end
 
 begin

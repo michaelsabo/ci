@@ -50,10 +50,15 @@ export const mockProjectListResponse: ProjectSummaryResponse[] = [
 export const mockProjectSummaryList =
     mockProjectListResponse.map((response) => new ProjectSummary(response));
 
+export const mockProjectSummary =
+    new ProjectSummary(mockProjectSummaryResponse);
+
 export const mockProjectResponse: ProjectResponse = {
   id: '12',
+  repo_name: 'fastlane/TacoRocat',
+  lane: 'ios test',
   name: 'the most coolest project',
   builds: [mockBuildSummaryResponse_success, mockBuildSummaryResponse_failure]
 };
 
-export const mockProject = new Project(mockProjectResponse);
+export const getMockProject = () => new Project(mockProjectResponse);

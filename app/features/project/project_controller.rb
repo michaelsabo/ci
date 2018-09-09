@@ -3,6 +3,7 @@ require_relative "../../shared/models/git_repo"
 require_relative "../../shared/models/git_hub_repo_config"
 require_relative "../../shared/fastfile_peeker"
 require_relative "../../shared/fastfile_finder"
+require_relative "../../features/build_runner/remote_runner"
 
 require "pathname"
 require "securerandom"
@@ -34,14 +35,20 @@ module FastlaneCI
       else
         checkout_folder = File.join(File.expand_path(project.local_repo_path), "manual_build_#{sha_or_uuid}")
       end
-      # TODO: This should be hidden in a service
-      repo = FastlaneCI::GitRepo.new(
-        git_config: project.repo_config,
-        local_folder: checkout_folder,
-        provider_credential: current_github_provider_credential,
-        notification_service: FastlaneCI::Services.notification_service
-      )
-      current_sha ||= repo.most_recent_commit.sha
+
+      # This could be hidden in a service
+      unless current_sha
+        # If we still don't know the sha, we'll need to grab the most current because
+        # we just triggered a build from the Project page instead of a specific build
+        repo = FastlaneCI::GitRepo.new(
+          git_config: project.repo_config,
+          local_folder: checkout_folder,
+          provider_credential: current_github_provider_credential,
+          notification_service: FastlaneCI::Services.notification_service
+        )
+        current_sha ||= repo.most_recent_commit.sha
+      end
+
       manual_triggers_allowed = project.job_triggers.any? do |trigger|
         trigger.type == FastlaneCI::JobTrigger::TRIGGER_TYPE[:manual]
       end
@@ -52,7 +59,7 @@ module FastlaneCI
         return
       end
 
-      branch_to_trigger = "master" # TODO: how/where do we get the default branch
+      branch_to_trigger = "master"
 
       git_fork_config = GitForkConfig.new(
         sha: current_sha,
@@ -60,20 +67,20 @@ module FastlaneCI
         clone_url: project.repo_config.git_url
         # we don't need to pass a `ref`, as the sha and branch is all we need
       )
+      trigger = project.job_triggers.find do |t|
+        t.type == FastlaneCI::JobTrigger::TRIGGER_TYPE[:manual]
+      end
 
-      build_runner = FastlaneBuildRunner.new(
+      remote_runner = RemoteRunner.new(
         project: project,
-        sha: current_sha,
-        github_service: FastlaneCI::GitHubService.new(provider_credential: current_github_provider_credential),
-        notification_service: FastlaneCI::Services.notification_service,
-        work_queue: FastlaneCI::GitRepo.git_action_queue, # using the git repo queue because of https://github.com/ruby-git/ruby-git/issues/355
-        trigger: project.find_triggers_of_type(trigger_type: :manual).first,
-        git_fork_config: git_fork_config
+        git_fork_config: git_fork_config,
+        trigger: trigger,
+        github_service: FastlaneCI::GitHubService.new(provider_credential: current_github_provider_credential)
       )
-      build_runner.setup(parameters: nil)
-      Services.build_runner_service.add_build_runner(build_runner: build_runner)
 
-      redirect("#{HOME}/#{project_id}/builds/#{build_runner.current_build_number}")
+      Services.build_runner_service.add_build_runner(build_runner: remote_runner)
+
+      redirect("#{HOME}/#{project_id}/builds/#{remote_runner.current_build.number}")
     end
 
     post "#{HOME}/:project_id/save" do
@@ -82,8 +89,6 @@ module FastlaneCI
       project.lane = params["selected_lane"]
       project.project_name = params["project_name"]
 
-      # TODO: what's the best way to store that project in the config?
-      # Wait for Josh' input
       FastlaneCI::Services.project_service.update_project!(project: project)
       redirect("#{HOME}/#{project_id}")
     end
@@ -208,24 +213,14 @@ module FastlaneCI
       hour = params["hour"]
       minute = params["minute"]
 
-      # TODO: Until we make a proper interface to attach JobTriggers to a Project, let's add a manual one for the
+      # Until we make a proper interface to attach JobTriggers to a Project, let's add a manual one for the
       # selected branch.
-      triggers_to_add = [FastlaneCI::ManualJobTrigger.new(branch: branch)]
-
-      case trigger_type
-      when FastlaneCI::JobTrigger::TRIGGER_TYPE[:commit]
-        triggers_to_add << FastlaneCI::CommitJobTrigger.new(branch: branch)
-      when FastlaneCI::JobTrigger::TRIGGER_TYPE[:manual]
-        logger.debug("Manual trigger selected - this is enabled by default")
-        # Nothing to do here, manual trigger is added by default
-      when FastlaneCI::JobTrigger::TRIGGER_TYPE[:nightly]
-        triggers_to_add << FastlaneCI::NightlyJobTrigger.new(branch: branch, hour: hour.to_i, minute: minute.to_i)
-      else
-        raise "Couldn't create a JobTrigger"
-      end
+      triggers_to_add = TriggerFactory.new.create(
+        params: { branch: branch, trigger_type: trigger_type, hour: hour, minute: minute }
+      )
 
       # We now have enough information to create the new project.
-      # TODO: add job_triggers here
+      # add job_triggers here
       # We shouldn't be blocking manual trigger builds
       # if we do not provide an interface to add them.
       project = Services.project_service.create_project!(
@@ -239,7 +234,7 @@ module FastlaneCI
 
       if !project.nil?
         # Do this so we trigger the clone of the repo.
-        # TODO: Do this wherever it should be done, as we must redirect
+        # Do this wherever it should be done, as we must redirect
         # to the project details only when this task is finished.
         repo = GitRepo.new(
           git_config: repo_config,
@@ -297,9 +292,9 @@ module FastlaneCI
         locals[:available_lanes] = available_lanes
       end
 
-      # TODO: We should think carefully about exposing the value of an existing ENV variable
-      #       as this could potentially introduce a security risk. During development
-      #       the code below will make debugging easier
+      # We should think carefully about exposing the value of an existing ENV variable
+      # as this could potentially introduce a security risk. During development
+      # the code below will make debugging easier
       locals[:global_env_variables] = Services.environment_variable_service.environment_variables
       locals[:project_env_variables] = project.environment_variables
 

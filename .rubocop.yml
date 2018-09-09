@@ -1,3 +1,6 @@
+require:
+  - ./lib/bundler_cop.rb
+
 # We're not joking around
 Style/Documentation:
   Enabled: true
@@ -230,6 +233,7 @@ AllCops:
     - './fastfile-parser/**/*'
     - './taskqueue/**/*'
     - '**/node_modules/**/*'
+    - 'protos/*_pb.rb'
 
 # They have not to be snake_case
 Naming/FileName:
@@ -266,6 +270,7 @@ Style/MethodCallWithArgsParentheses:
     - 'attr_reader'
     # rspec tests code below
     - 'to'
+    - 'not_to'
     - 'describe'
     - 'it'
     - 'context'

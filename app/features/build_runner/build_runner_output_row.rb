@@ -30,17 +30,8 @@ module FastlaneCI
       @type = type
       @message = message
       @time = time
-    end
 
-    # Did this particular message fail the build? (e.g. `user_error` or `build_error`)
-    # TODO: Let's think about removing this method, we probably won't need it any more
-    #       and with that, we could remove `BUILD_FAIL_TYPES`
-    def did_fail_build?
-      # The first time this method is called, we check if this row failed the build
-      if @_did_fail_build.nil?
-        @_did_fail_build = BUILD_FAIL_TYPES.include?(type)
-      end
-      return @_did_fail_build
+      @html = FastlaneOutputToHtml.convert_row(self)
     end
 
     # Is this the last row? We guarantee that we send this out to listeners

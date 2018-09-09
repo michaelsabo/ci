@@ -197,12 +197,33 @@ module FastlaneCI
           details: user_unfriendly_message
         )
 
+      # Sometimes we try to commit something and it fails because there was nothing added to the change set.
+      elsif user_unfriendly_message.include?("no changes added to commit")
+        priority = Notification::PRIORITIES[:warn]
+        notification_service.create_notification!(
+          priority: priority,
+          name: "Repo syncing warning: no changes in added to commit error",
+          message: "Unable to perform sync, the there are no changes added to the commit for #{git_config.git_url}",
+          details: user_unfriendly_message
+        )
+
+      # Sometimes a repo is told to do something like commit when nothing is added to the change set
+      # It's weird, and indicative of a race condition somewhere, so let's log it and move on
+      elsif user_unfriendly_message.include?("Your branch is up to date with")
+        priority = Notification::PRIORITIES[:warn]
+        notification_service.create_notification!(
+          priority: priority,
+          name: "Repo syncing warning: up to date repo error",
+          message: "Unable to perform sync, the repo is already up to date #{git_config.git_url}",
+          details: user_unfriendly_message
+        )
+
       # Merge conflict, maybe somebody force-pushed something?
       elsif user_unfriendly_message.include?("Merge conflict")
         priority = Notification::PRIORITIES[:urgent]
         notification_service.create_notification!(
           priority: priority,
-          name: "Merge conflict",
+          name: "Repo syncing error: merge conflict",
           message: "Unable to build #{git_config.git_url}",
           details: "#{user_unfriendly_message}, context: #{exception_context}"
         )
@@ -271,7 +292,7 @@ module FastlaneCI
                 begin
                   repo.add(all: true)
                   repo.commit("Sync changes")
-                  git.push(GitRepo::DEFAULT_REMOTE, branch: "master", force: true) unless GitRepo.pushes_disabled?
+                  git.push(GitRepo::DEFAULT_REMOTE, "master", force: true) unless GitRepo.pushes_disabled?
                 rescue StandardError => ex
                   handle_exception(ex, console_message: "Error commiting changes to ci-config repo")
                 end
@@ -451,7 +472,7 @@ module FastlaneCI
     end
 
     def pull(repo_auth: self.repo_auth, use_global_git_mutex: true)
-      logger.debug("Enqueuing a pull on `master` (with mutex?: #{use_global_git_mutex}) for #{git_config.git_url}")
+      logger.debug("Enqueuing a pull (with mutex?: #{use_global_git_mutex}) for #{git_config.git_url}")
       perform_block(use_global_git_mutex: use_global_git_mutex) do
         logger.info("Starting pull #{git_config.git_url}")
         setup_auth(repo_auth: repo_auth)
@@ -527,17 +548,20 @@ module FastlaneCI
     end
 
     # This method commits and pushes all changes
-    # if `file_to_commit` is `nil`, all files will be added
+    # if `files_to_commit` is empty or nil, all files will be added
     # TODO: this method isn't actually tested yet
-    def commit_changes!(commit_message: nil, push_after_commit: true, file_to_commit: nil, repo_auth: self.repo_auth)
+    def commit_changes!(commit_message: nil, push_after_commit: true, files_to_commit: [], repo_auth: self.repo_auth)
       git_action_with_queue do
         logger.debug("Starting commit_changes! #{git_config.git_url} for #{repo_auth.username}")
-        raise "file_to_commit not yet implemented" if file_to_commit
         commit_message ||= "Automatic commit by fastlane.ci"
 
         setup_author(full_name: repo_auth.full_name, username: repo_auth.username)
 
-        git.add(all: true) # TODO: for now we only add all files
+        if files_to_commit.nil? || files_to_commit.empty?
+          git.add(all: true)
+        else
+          git.add(files_to_commit)
+        end
         changed = git.status.changed
         added = git.status.added
         deleted = git.status.deleted
@@ -545,7 +569,6 @@ module FastlaneCI
         if changed.count == 0 && added.count == 0 && deleted.count == 0
           logger.debug("No changes in repo #{git_config.full_name}, skipping commit #{commit_message}")
         else
-
           begin
             git.commit(commit_message)
           rescue StandardError => ex
@@ -617,7 +640,7 @@ module FastlaneCI
         logger.debug("Switching to branch #{branch} from forked repo: #{clone_url} (pulling into #{local_branch_name})")
 
         begin
-          git.branch(local_branch_name)
+          git.branch(local_branch_name).checkout
           git.pull(clone_url, branch)
           return true
         rescue StandardError => ex
@@ -642,8 +665,9 @@ module FastlaneCI
         begin
           ref = "#{git_fork_config.ref}:#{local_branch_name}"
           logger.debug("Switching to new branch from ref #{ref} (pulling into #{local_branch_name})")
-          git.fetch(GitRepo::DEFAULT_REMOTE, ref, {})
+          git.fetch(GitRepo::DEFAULT_REMOTE, { ref: ref })
           git.branch(local_branch_name)
+          git.checkout(local_branch_name)
           return true
         rescue StandardError => ex
           exception_context = {
