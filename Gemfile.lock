@@ -6,7 +6,7 @@ GIT
 
 GIT
   remote: https://github.com/fastlane/fastfile-parser
-  revision: 231cb18ea44974cffe9502fbfb7b42ebf7d25bc5
+  revision: 10b8d313e999788baaada68b20e9f50833a0372a
   specs:
     fastfile-parser (0.0.0)
       parser (>= 2.4.0.2, < 2.5.0.0)
@@ -324,7 +324,7 @@ GEM
       unf_ext
     unf_ext (0.0.7.5)
     unicode-display_width (1.4.0)
-    unparser (0.2.7)
+    unparser (0.4.2)
       abstract_type (~> 0.0.7)
       adamantium (~> 0.2.0)
       concord (~> 0.1.5)
