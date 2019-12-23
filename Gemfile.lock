@@ -170,7 +170,7 @@ GEM
     grpc (1.13.0)
       google-protobuf (~> 3.1)
       googleapis-common-protos-types (~> 1.0.0)
-    grpc-tools (1.12.0)
+    grpc-tools (1.26.0)
     hashdiff (0.3.7)
     highline (1.7.10)
     http-cookie (1.0.3)
